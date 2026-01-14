@@ -66,7 +66,7 @@ def train_model(dataset_path):
         logging_dir='./logs',
         logging_steps=10,
         learning_rate=2e-5,
-        evaluation_strategy="steps",
+        eval_strategy="steps",
         eval_steps=100,
         save_strategy="steps",
         save_steps=100,
@@ -83,7 +83,7 @@ def train_model(dataset_path):
 
     trainer.train()
 
-    model_path = "./phishing_detector_model"
+    model_path = os.path.join(os.path.dirname(__file__), "phishing_detector_model")
     if not os.path.exists(model_path):
         os.makedirs(model_path)
     
@@ -92,7 +92,7 @@ def train_model(dataset_path):
     print(f"Model saved to {model_path}")
 
 if __name__ == "__main__":
-    dataset_path = "phishing_emails.csv"
+    dataset_path = os.path.join(os.path.dirname(__file__), "phishing_emails.csv")
     if os.path.exists(dataset_path):
         train_model(dataset_path)
     else:
