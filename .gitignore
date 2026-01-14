@@ -183,4 +183,5 @@ logs/
 app/results/
 app/phishing_history.db
 phishing_history.db
+app/phishing_detector_model/
 frontend/
