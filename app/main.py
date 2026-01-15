@@ -21,8 +21,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-MODEL_PATH = "app/phishing_detector_model"
-CHECKPOINT_PATH = "app/results/checkpoint-48"
+MODEL_PATH = os.path.join(os.path.dirname(__file__), "phishing_detector_model")
+CHECKPOINT_PATH = os.path.join(os.path.dirname(__file__), "results", "checkpoint-48")
 
 if os.path.exists(CHECKPOINT_PATH):
     print(f"Using checkpoint model from {CHECKPOINT_PATH}")
