@@ -6,7 +6,7 @@ import sqlite3
 import json
 from datetime import datetime
 import torch
-from transformers import BertTokenizer, BertForSequenceClassification, Trainer, TrainingArguments
+from transformers import BertTokenizer, BertForSequenceClassification, DistilBertForSequenceClassification, Trainer, TrainingArguments
 from urllib.parse import urlparse
 import re
 import os
@@ -35,9 +35,9 @@ elif os.path.exists(MODEL_PATH) and os.path.exists(os.path.join(MODEL_PATH, "con
     model = BertForSequenceClassification.from_pretrained(MODEL_PATH, num_labels=2)
     print("Model loaded successfully")
 else:
-    print("No trained model found, using base BERT model")
-    tokenizer = BertTokenizer.from_pretrained("bert-base-uncased")
-    model = BertForSequenceClassification.from_pretrained("bert-base-uncased", num_labels=2)
+    print("No trained model found, using base DistilBERT model")
+    tokenizer = BertTokenizer.from_pretrained("distilbert-base-uncased")
+    model = DistilBertForSequenceClassification.from_pretrained("distilbert-base-uncased", num_labels=2)
     os.makedirs(MODEL_PATH, exist_ok=True)
 
 class ScanRequest(BaseModel):
