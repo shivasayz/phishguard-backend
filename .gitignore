@@ -178,10 +178,16 @@ pyrightconfig.json
 # Project specific
 *.db
 *.sqlite
+*.csv
 results/
 logs/
 app/results/
 app/phishing_history.db
 phishing_history.db
 app/phishing_detector_model/
+app/phishing_emails.csv
+train_model.py
 frontend/
+*.safetensors
+*.bin
+checkpoint-*/

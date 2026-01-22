@@ -16,3 +16,6 @@ logs/
 *.swp
 .DS_Store
 frontend/
+*.csv
+train_model.py
+phishing_detector_model/

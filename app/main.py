@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, UploadFile, File, BackgroundTasks
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, field_validator
 from typing import List, Optional
@@ -6,10 +6,9 @@ import sqlite3
 import json
 from datetime import datetime
 import torch
-from transformers import BertTokenizer, BertForSequenceClassification, DistilBertForSequenceClassification, Trainer, TrainingArguments
+from transformers import DistilBertTokenizer, DistilBertForSequenceClassification
 from urllib.parse import urlparse
 import re
-import os
 
 app = FastAPI()
 
@@ -21,24 +20,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-MODEL_PATH = os.path.join(os.path.dirname(__file__), "phishing_detector_model")
-CHECKPOINT_PATH = os.path.join(os.path.dirname(__file__), "results", "checkpoint-48")
-
-if os.path.exists(CHECKPOINT_PATH):
-    print(f"Using checkpoint model from {CHECKPOINT_PATH}")
-    tokenizer = BertTokenizer.from_pretrained(CHECKPOINT_PATH)
-    model = BertForSequenceClassification.from_pretrained(CHECKPOINT_PATH, num_labels=2)
-    print("Model loaded successfully")
-elif os.path.exists(MODEL_PATH) and os.path.exists(os.path.join(MODEL_PATH, "config.json")):
-    print(f"Using trained model from {MODEL_PATH}")
-    tokenizer = BertTokenizer.from_pretrained(MODEL_PATH)
-    model = BertForSequenceClassification.from_pretrained(MODEL_PATH, num_labels=2)
-    print("Model loaded successfully")
-else:
-    print("No trained model found, using base DistilBERT model")
-    tokenizer = BertTokenizer.from_pretrained("distilbert-base-uncased")
-    model = DistilBertForSequenceClassification.from_pretrained("distilbert-base-uncased", num_labels=2)
-    os.makedirs(MODEL_PATH, exist_ok=True)
+print("Loading DistilBERT model...")
+tokenizer = DistilBertTokenizer.from_pretrained("distilbert-base-uncased")
+model = DistilBertForSequenceClassification.from_pretrained("distilbert-base-uncased", num_labels=2)
+print("Model loaded successfully")
 
 class ScanRequest(BaseModel):
     content_type: str
@@ -168,28 +153,30 @@ def analyze_url(url: str) -> tuple:
             return "Error", 0.0, ["Invalid URL: Unable to parse domain"]
             
         flagged_patterns = []
-        risk_score = 0.0
         
         legitimate_domains = {'google.com', 'amazon.com', 'microsoft.com', 'apple.com', 
-            'facebook.com', 'twitter.com', 'linkedin.com', 'github.com'}
+            'facebook.com', 'twitter.com', 'linkedin.com', 'github.com', 'youtube.com',
+            'instagram.com', 'netflix.com', 'paypal.com', 'ebay.com', 'walmart.com'}
+        
+        if domain in legitimate_domains or domain.endswith(tuple(f'.{d}' for d in legitimate_domains)):
+            return "Low", 0.1, ["Legitimate domain"]
+        
+        risk_score = 0.0
         
         for legit_domain in legitimate_domains:
             if domain != legit_domain and legit_domain[:-4] in domain:
                 flagged_patterns.append(f"Possible lookalike domain for {legit_domain}")
-                risk_score += 0.4
+                risk_score += 0.6
 
         suspicious_patterns = [
             (r'bit\.ly|tinyurl\.com|goo\.gl', "URL shortener service", 0.3),
-            (r'[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+', "IP address in URL", 0.4),
-            (r'(password|login|signin|verify|account|update|security)', "Sensitive terms in URL", 0.3),
-            (r'@', "@ symbol in URL", 0.5),
-            (r'data:|javascript:|file:', "Suspicious URL scheme", 0.6),
-            (r'\.php\?', "PHP script with parameters", 0.2),
-            (r'[^a-zA-Z0-9-.]', "Special characters in domain", 0.3),
-            (r'(bank|paypal|ebay|amazon|apple|microsoft).*\.(tk|ga|gq|ml|cf)', "Suspicious TLD combination", 0.6),
-            (r'secure[0-9]*\.', "Numbered secure subdomain", 0.4),
-            (r'-?update-?account', "Account update keywords", 0.4),
-            (r'(confirm|verify|secure|login)[^/]*\.(com|net|org)', "Authentication-related subdomain", 0.4)
+            (r'[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+', "IP address in URL", 0.5),
+            (r'(password|login|signin|verify|account|update|security)', "Sensitive terms in URL", 0.4),
+            (r'@', "@ symbol in URL", 0.6),
+            (r'data:|javascript:|file:', "Suspicious URL scheme", 0.8),
+            (r'(bank|paypal|ebay|amazon|apple|microsoft).*\.(tk|ga|gq|ml|cf)', "Suspicious TLD combination", 0.8),
+            (r'secure[0-9]*\.', "Numbered secure subdomain", 0.5),
+            (r'-?update-?account', "Account update keywords", 0.5)
         ]
 
         for pattern, description, score in suspicious_patterns:
@@ -201,46 +188,29 @@ def analyze_url(url: str) -> tuple:
             flagged_patterns.append("Unusually long domain name")
             risk_score += 0.3
 
-        if re.search(r'[А-Яа-я]', domain):
-            flagged_patterns.append("Mixed character sets (possible homograph attack)")
-            risk_score += 0.5
-
         subdomain_count = len(domain.split('.')) - 1
         if subdomain_count > 3:
             flagged_patterns.append(f"Excessive subdomains ({subdomain_count})")
-            risk_score += 0.2 * (subdomain_count - 3)
+            risk_score += 0.3
 
         suspicious_tlds = ['.tk', '.ml', '.ga', '.cf', '.gq', '.xyz', '.top', '.club', '.work', '.date', '.bid']
         for tld in suspicious_tlds:
             if domain.endswith(tld):
                 flagged_patterns.append(f"Suspicious TLD ({tld})")
-                risk_score += 0.3
+                risk_score += 0.5
                 break
 
-        try:
-            inputs = tokenizer(url, return_tensors="pt", truncation=True, max_length=512, padding=True)
-            with torch.no_grad():
-                outputs = model(**inputs)
-                predictions = torch.nn.functional.softmax(outputs.logits, dim=-1)
-                bert_score = predictions[0][1].item()
-        except Exception as e:
-            print(f"Error in BERT analysis for URL: {e}")
-            bert_score = 0.0
-
-        combined_score = (risk_score * 0.7 + bert_score * 0.3)
-        combined_score = min(1.0, combined_score)
-
-        if combined_score > 0.75:
+        if risk_score > 0.7:
             risk_level = "High"
-        elif combined_score > 0.4:
+        elif risk_score > 0.3:
             risk_level = "Medium"
         else:
             risk_level = "Low"
 
-        if not flagged_patterns and risk_level == "Low":
-            flagged_patterns.append("No specific suspicious patterns detected")
+        if not flagged_patterns:
+            flagged_patterns.append("No suspicious patterns detected")
 
-        return risk_level, combined_score, flagged_patterns
+        return risk_level, min(risk_score, 1.0), flagged_patterns
 
     except Exception as e:
         return "Error", 0.0, [f"Error in URL analysis: {str(e)}"]
@@ -378,7 +348,7 @@ async def clear_history():
     return {"message": "History cleared successfully"}
 
 @app.post("/feedback")
-async def submit_feedback(feedback: FeedbackRequest, background_tasks: BackgroundTasks):
+async def submit_feedback(feedback: FeedbackRequest):
     conn = sqlite3.connect('phishing_history.db')
     cursor = conn.cursor()
     
@@ -389,83 +359,9 @@ async def submit_feedback(feedback: FeedbackRequest, background_tasks: Backgroun
     ''', (1 if feedback.is_correct else 0, feedback.feedback_text, feedback.scan_id))
     
     conn.commit()
-    
-    cursor.execute('''
-    SELECT content_type, email_preview, url, risk_level, confidence_score
-    FROM scan_history
-    WHERE id = ?
-    ''', (feedback.scan_id,))
-    
-    scan_data = cursor.fetchone()
     conn.close()
     
-    if scan_data and not feedback.is_correct:
-        background_tasks.add_task(update_model_with_feedback, scan_data, feedback)
-    
     return {"message": "Feedback submitted successfully"}
-
-def update_model_with_feedback(scan_data, feedback):
-    try:
-        content_type, content_preview, url, risk_level, confidence_score = scan_data
-        
-        content = None
-        if content_type == 'text':
-            content = content_preview
-        elif content_type == 'url' and url:
-            content = url
-            
-        if not content:
-            print("No content available for model update")
-            return
-            
-        was_predicted_phishing = confidence_score > 0.5
-        actual_label = 0 if was_predicted_phishing else 1
-        
-        print(f"Updating model with feedback - Content type: {content_type}, Current confidence: {confidence_score}, New label: {actual_label}")
-        
-        inputs = tokenizer(content, truncation=True, max_length=512, padding="max_length", return_tensors="pt")
-        
-        class SimpleDataset(torch.utils.data.Dataset):
-            def __init__(self, encodings, labels):
-                self.encodings = encodings
-                self.labels = labels
-
-            def __getitem__(self, idx):
-                item = {key: val[idx] for key, val in self.encodings.items()}
-                item['labels'] = self.labels[idx]
-                return item
-
-            def __len__(self):
-                return len(self.labels)
-        
-        dataset = SimpleDataset(inputs, torch.tensor([actual_label]))
-        
-        training_args = TrainingArguments(
-            output_dir='./results',
-            per_device_train_batch_size=1,
-            num_train_epochs=5,
-            learning_rate=1e-5,
-            save_strategy="no",
-            logging_steps=1,
-            logging_dir='./logs',
-            weight_decay=0.01,
-        )
-        
-        trainer = Trainer(
-            model=model,
-            args=training_args,
-            train_dataset=dataset,
-        )
-        
-        trainer.train()
-        
-        model.save_pretrained(MODEL_PATH)
-        model.save_pretrained(CHECKPOINT_PATH)
-        
-        print(f"Model updated successfully with feedback and saved to {MODEL_PATH} and {CHECKPOINT_PATH}")
-        
-    except Exception as e:
-        print(f"Error updating model with feedback: {e}")
 
 if __name__ == "__main__":
     import uvicorn
